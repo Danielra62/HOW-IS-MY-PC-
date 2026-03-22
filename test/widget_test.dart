@@ -1,30 +1,19 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
 import 'package:mi_app/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('Prueba de humo: Carga de pantalla de inicio', (WidgetTester tester) async {
+    // Construye nuestra app y dispara un frame.
+    await tester.pumpWidget(const MalwareGame());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    // Verifica que aparezca el título del juego.
+    expect(find.text('🦠 MALWARE'), findsOneWidget);
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    // Verifica que existan los botones de Host y Unirse.
+    expect(find.text('CREAR PARTIDA (HOST)'), findsOneWidget);
+    expect(find.text('UNIRSE A PARTIDA'), findsOneWidget);
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // Verifica que el campo de nombre tenga un valor inicial (no esté vacío).
+    expect(find.textContaining('Jugador'), findsOneWidget);
   });
 }
