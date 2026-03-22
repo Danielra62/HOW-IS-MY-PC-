@@ -5,6 +5,7 @@ import 'services/network_utils.dart';
 import 'services/game_server.dart';
 import 'services/game_client.dart';
 import 'models/jugador.dart';
+import 'models/carta.dart';
 
 void main() {
   runApp(const MalwareGame());
@@ -216,17 +217,29 @@ class LobbyScreen extends StatefulWidget {
 class _LobbyScreenState extends State<LobbyScreen> {
   final GameClient _client = GameClient();
   List<Jugador> _jugadores = [];
+  String? _myId;
 
   @override
   void initState() {
     super.initState();
     _client.onMessageReceived = (data) {
-      if (data['type'] == 'update') {
+      if (data['type'] == 'welcome') {
+        _myId = data['yourId'];
+      } else if (data['type'] == 'update' || data['type'] == 'game_started') {
         setState(() {
           _jugadores = (data['jugadores'] as List)
               .map((j) => Jugador.fromJson(j))
               .toList();
         });
+
+        if (data['type'] == 'game_started') {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => GameScreen(client: _client, iniciales: _jugadores, myId: _myId!, turnoActualId: data['turnoActualId']),
+            ),
+          );
+        }
       }
     };
     _client.connect(widget.ip, widget.nombre);
@@ -274,7 +287,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
                 child: ElevatedButton(
                   onPressed: _jugadores.length >= 2
                       ? () {
-                          // TODO: Implementar cambio a pantalla de juego
+                          _client.sendMessage({'type': 'start_game'});
                         }
                       : null,
                   style: ElevatedButton.styleFrom(
@@ -287,11 +300,162 @@ class _LobbyScreenState extends State<LobbyScreen> {
       ),
     );
   }
+}
+
+class GameScreen extends StatefulWidget {
+  final GameClient client;
+  final List<Jugador> iniciales;
+  final String myId;
+  final String? turnoActualId;
+
+  const GameScreen({super.key, required this.client, required this.iniciales, required this.myId, this.turnoActualId});
 
   @override
-  void dispose() {
-    _client.disconnect();
-    if (widget.isHost) widget.server?.stopServer();
-    super.dispose();
+  State<GameScreen> createState() => _GameScreenState();
+}
+
+class _GameScreenState extends State<GameScreen> {
+  late List<Jugador> _jugadores;
+  String? _turnoActualId;
+
+  @override
+  void initState() {
+    super.initState();
+    _jugadores = widget.iniciales;
+    _turnoActualId = widget.turnoActualId;
+    widget.client.onMessageReceived = (data) {
+      if (data['type'] == 'update') {
+        setState(() {
+          _jugadores = (data['jugadores'] as List)
+              .map((j) => Jugador.fromJson(j))
+              .toList();
+          _turnoActualId = data['turnoActualId'];
+        });
+      }
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final yo = _jugadores.firstWhere((j) => j.id == widget.myId);
+    final otros = _jugadores.where((j) => j.id != widget.myId).toList();
+    final miTurno = _turnoActualId == widget.myId;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(miTurno ? "🎮 ¡ES TU TURNO!" : "⌛ Esperando turno..."),
+        backgroundColor: miTurno ? Colors.green[900] : Colors.grey[900],
+      ),
+      body: Column(
+        children: [
+          // Equipos de Rivales (Arriba)
+          SizedBox(
+            height: 200,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: otros.length,
+              itemBuilder: (context, index) {
+                return _buildEquipoRival(otros[index]);
+              },
+            ),
+          ),
+          const Spacer(),
+          // Mi Tablero (Medio)
+          _buildMiTablero(yo),
+          const Spacer(),
+          // Mi Mano (Abajo)
+          const Text('TU MANO', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+          Container(
+            height: 120,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: yo.mano.map((carta) => _buildCartaMano(carta, miTurno)).toList(),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEquipoRival(Jugador rival) {
+    return Container(
+      width: 150,
+      margin: const EdgeInsets.all(8),
+      decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(10)),
+      child: Column(
+        children: [
+          Text(rival.nombre, style: const TextStyle(fontWeight: FontWeight.bold)),
+          const Divider(),
+          // Mostrar mini-iconos de sus piezas
+          Wrap(
+            children: rival.componentes.entries.map((entry) {
+              return Icon(
+                _getIconForComponent(entry.key),
+                size: 20,
+                color: entry.value == null ? Colors.grey : Colors.green,
+              );
+            }).toList(),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMiTablero(Jugador yo) {
+    return Column(
+      children: [
+        const Text('TU EQUIPO', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: yo.componentes.entries.map((entry) {
+            return Column(
+              children: [
+                Icon(_getIconForComponent(entry.key), size: 40, color: entry.value == null ? Colors.grey : Colors.greenAccent),
+                Text(entry.key.toUpperCase(), style: const TextStyle(fontSize: 10)),
+              ],
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  IconData _getIconForComponent(String type) {
+    switch (type) {
+      case 'cpu': return Icons.memory;
+      case 'gpu': return Icons.videogame_asset;
+      case 'ram': return Icons.storage;
+      case 'ssd': return Icons.developer_board;
+      case 'motherboard': return Icons.settings_input_component;
+      default: return Icons.help;
+    }
+  }
+
+  Widget _buildCartaMano(Carta carta, bool miTurno) {
+    return GestureDetector(
+      onTap: miTurno ? () {
+        // Lógica para jugar carta (Fase 3)
+      } : null,
+      child: Container(
+        width: 80,
+        margin: const EdgeInsets.symmetric(horizontal: 4),
+        decoration: BoxDecoration(
+          color: miTurno ? Colors.grey[850] : Colors.black,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: miTurno ? Colors.greenAccent : Colors.grey, width: 2),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(carta.nombre, textAlign: TextAlign.center, style: const TextStyle(fontSize: 10)),
+            const Divider(),
+            Text(carta.tipo.name, style: const TextStyle(fontSize: 8, color: Colors.grey)),
+          ],
+        ),
+      ),
+    );
   }
 }
