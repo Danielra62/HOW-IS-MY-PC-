@@ -36,7 +36,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final TextEditingController _nameController = TextEditingController(text: "Jugador ${DateTime.now().millisecond}");
+  final TextEditingController _nameController = TextEditingController(text: "Jugador Test");
+  bool _isStarting = false;
 
   @override
   Widget build(BuildContext context) {
@@ -56,16 +57,26 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 20),
               ElevatedButton(
-                onPressed: () => _startHost(),
+                onPressed: _isStarting ? null : () => _startHost(),
                 style: ElevatedButton.styleFrom(minimumSize: const Size(200, 50)),
                 child: const Text('CREAR PARTIDA (HOST)'),
               ),
               const SizedBox(height: 10),
               OutlinedButton(
-                onPressed: () => _joinGame(),
+                onPressed: _isStarting ? null : () => _joinGame(),
                 style: OutlinedButton.styleFrom(minimumSize: const Size(200, 50)),
                 child: const Text('UNIRSE A PARTIDA'),
               ),
+              const SizedBox(height: 30),
+              const Divider(),
+              if (_isStarting)
+                const CircularProgressIndicator()
+              else
+                TextButton.icon(
+                  onPressed: () => _startQuickTest(),
+                  icon: const Icon(Icons.bug_report, color: Colors.amber),
+                  label: const Text('PROBAR PARTIDA (SOLO)', style: TextStyle(color: Colors.amber)),
+                ),
             ],
           ),
         ),
@@ -73,31 +84,60 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _startHost() async {
-    final ip = await NetworkUtils.getLocalIP();
-    if (ip == null) {
+  void _startQuickTest() async {
+    setState(() => _isStarting = true);
+    try {
+      final server = GameServer();
+      await server.startServer();
+
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo obtener la IP local. Revisa tu conexión.')),
-      );
-      return;
-    }
-
-    final server = GameServer();
-    await server.startServer();
-
-    if (!mounted) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => LobbyScreen(
-          ip: ip,
-          nombre: _nameController.text,
-          isHost: true,
-          server: server,
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => LobbyScreen(
+            ip: '127.0.0.1',
+            nombre: _nameController.text,
+            isHost: true,
+            server: server,
+            isQuickTest: true,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    } finally {
+      if (mounted) setState(() => _isStarting = false);
+    }
+  }
+
+  void _startHost() async {
+    setState(() => _isStarting = true);
+    try {
+      final ip = await NetworkUtils.getLocalIP();
+      if (ip == null) {
+        throw 'No se pudo obtener la IP local.';
+      }
+
+      final server = GameServer();
+      await server.startServer();
+
+      if (!mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => LobbyScreen(
+            ip: ip,
+            nombre: _nameController.text,
+            isHost: true,
+            server: server,
+          ),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    } finally {
+      if (mounted) setState(() => _isStarting = false);
+    }
   }
 
   void _joinGame() {
@@ -201,6 +241,7 @@ class LobbyScreen extends StatefulWidget {
   final String nombre;
   final bool isHost;
   final GameServer? server;
+  final bool isQuickTest;
 
   const LobbyScreen({
     super.key,
@@ -208,6 +249,7 @@ class LobbyScreen extends StatefulWidget {
     required this.nombre,
     required this.isHost,
     this.server,
+    this.isQuickTest = false,
   });
 
   @override
@@ -225,6 +267,15 @@ class _LobbyScreenState extends State<LobbyScreen> {
     _client.onMessageReceived = (data) {
       if (data['type'] == 'welcome') {
         _myId = data['yourId'];
+        // Si es test rápido, añadimos bots y arrancamos tras conectar
+        if (widget.isQuickTest) {
+          Future.delayed(const Duration(milliseconds: 500), () {
+            _client.sendMessage({'type': 'add_dummies'});
+            Future.delayed(const Duration(milliseconds: 300), () {
+              _client.sendMessage({'type': 'start_game'});
+            });
+          });
+        }
       } else if (data['type'] == 'update' || data['type'] == 'game_started') {
         if (!mounted) return;
         setState(() {
@@ -249,11 +300,21 @@ class _LobbyScreenState extends State<LobbyScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Lobby de Espera')),
+      appBar: AppBar(
+        title: Text(widget.isQuickTest ? 'Iniciando Prueba...' : 'Lobby de Espera'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            _client.disconnect();
+            if (widget.isHost) widget.server?.stopServer();
+            Navigator.pop(context);
+          },
+        ),
+      ),
       body: Center(
         child: Column(
           children: [
-            if (widget.isHost) ...[
+            if (widget.isHost && !widget.isQuickTest) ...[
               const SizedBox(height: 20),
               const Text('Comparte este QR con tus amigos:',
                   style: TextStyle(fontSize: 16)),
@@ -282,7 +343,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
                 },
               ),
             ),
-            if (widget.isHost)
+            if (widget.isHost && !widget.isQuickTest)
               Padding(
                 padding: const EdgeInsets.all(24.0),
                 child: ElevatedButton(
@@ -301,6 +362,12 @@ class _LobbyScreenState extends State<LobbyScreen> {
       ),
     );
   }
+
+  @override
+  void dispose() {
+    // El cliente se desconecta si no vamos a GameScreen
+    super.dispose();
+  }
 }
 
 class GameScreen extends StatefulWidget {
@@ -318,6 +385,7 @@ class GameScreen extends StatefulWidget {
 class _GameScreenState extends State<GameScreen> {
   late List<Jugador> _jugadores;
   String? _turnoActualId;
+  Carta? _cartaSeleccionada;
 
   @override
   void initState() {
@@ -332,9 +400,29 @@ class _GameScreenState extends State<GameScreen> {
               .map((j) => Jugador.fromJson(j))
               .toList();
           _turnoActualId = data['turnoActualId'];
+          _cartaSeleccionada = null;
         });
+      } else if (data['type'] == 'victory') {
+        _mostrarGanador(data['winnerName']);
       }
     };
+  }
+
+  void _mostrarGanador(String nombre) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('🏆 ¡FIN DE PARTIDA!'),
+        content: Text('El jugador $nombre ha completado su equipo sano.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).popUntil((route) => route.isFirst),
+            child: const Text('VOLVER AL INICIO'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -342,6 +430,7 @@ class _GameScreenState extends State<GameScreen> {
     final yo = _jugadores.firstWhere((j) => j.id == widget.myId);
     final otros = _jugadores.where((j) => j.id != widget.myId).toList();
     final miTurno = _turnoActualId == widget.myId;
+    final eligiendoObjetivo = _cartaSeleccionada != null;
 
     return Scaffold(
       appBar: AppBar(
@@ -350,27 +439,31 @@ class _GameScreenState extends State<GameScreen> {
       ),
       body: Column(
         children: [
-          // Equipos de Rivales (Arriba)
           SizedBox(
-            height: 120,
+            height: 140,
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
               itemCount: otros.length,
               itemBuilder: (context, index) {
-                return _buildEquipoRival(otros[index]);
+                final rival = otros[index];
+                return _buildEquipoRival(rival, eligiendoObjetivo, miTurno);
               },
             ),
           ),
           const Divider(),
-          // Mi Tablero (Centro)
           Expanded(child: _buildMiTablero(yo)),
           const Divider(),
-          // Instrucciones rápidas
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 4),
-            child: Text('Tocar: Jugar | Mantener: Descartar', style: TextStyle(fontSize: 10, color: Colors.grey)),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Text(
+              eligiendoObjetivo ? '¡SELECCIONA EL OBJETIVO!' : 'Tocar: Jugar | Mantener: Descartar',
+              style: TextStyle(
+                fontSize: 10, 
+                color: eligiendoObjetivo ? Colors.amberAccent : Colors.grey, 
+                fontWeight: eligiendoObjetivo ? FontWeight.bold : FontWeight.normal
+              ),
+            ),
           ),
-          // Mi Mano (Abajo)
           Container(
             height: 140,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -385,30 +478,73 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
-  Widget _buildEquipoRival(Jugador rival) {
-    return Container(
-      width: 140,
-      margin: const EdgeInsets.all(4),
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(10)),
-      child: Column(
-        children: [
-          Text(rival.nombre, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12), overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 4),
-          Wrap(
-            spacing: 2,
-            runSpacing: 2,
-            children: rival.componentes.entries.map((entry) {
-              return Icon(
-                _getIconForComponent(entry.key),
-                size: 16,
-                color: entry.value == null ? Colors.white24 : Colors.greenAccent,
-              );
-            }).toList(),
-          )
-        ],
+  Widget _buildEquipoRival(Jugador rival, bool resaltado, bool miTurno) {
+    bool necesitaSoloJugador = _cartaSeleccionada != null && 
+        (_cartaSeleccionada!.subtipo!.contains('cuelgue') || _cartaSeleccionada!.subtipo!.contains('intercambio'));
+    
+    bool necesitaComponente = _cartaSeleccionada != null && 
+        (_cartaSeleccionada!.tipo == TipoCarta.falla || _cartaSeleccionada!.subtipo!.contains('robo') || _cartaSeleccionada!.subtipo!.contains('hackeo'));
+
+    return GestureDetector(
+      onTap: (miTurno && necesitaSoloJugador) ? () => _jugarContraRival(rival, null) : null,
+      child: Container(
+        width: 150,
+        margin: const EdgeInsets.all(4),
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: (resaltado && necesitaSoloJugador) ? Colors.amber.withAlpha(40) : Colors.black45,
+          borderRadius: BorderRadius.circular(10),
+          border: (resaltado && necesitaSoloJugador) ? Border.all(color: Colors.amberAccent, width: 2) : null,
+        ),
+        child: Column(
+          children: [
+            Text(rival.nombre, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12), overflow: TextOverflow.ellipsis),
+            const Divider(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              alignment: WrapAlignment.center,
+              children: rival.componentes.entries.map((entry) {
+                bool tienePieza = entry.value != null;
+                Color iconColor = Colors.white24;
+                if (tienePieza) {
+                  switch (entry.value!.estado) {
+                    case EstadoComponente.sano: iconColor = Colors.greenAccent; break;
+                    case EstadoComponente.danado: iconColor = Colors.redAccent; break;
+                    case EstadoComponente.blindado: iconColor = Colors.blueAccent; break;
+                    default: iconColor = Colors.white24;
+                  }
+                }
+                
+                return GestureDetector(
+                  onTap: (miTurno && necesitaComponente && tienePieza) ? () => _jugarContraRival(rival, entry.key) : null,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: (resaltado && necesitaComponente && tienePieza) ? Colors.white10 : Colors.transparent,
+                      borderRadius: BorderRadius.circular(4),
+                      border: (resaltado && necesitaComponente && tienePieza) ? Border.all(color: Colors.amberAccent) : null,
+                    ),
+                    child: Icon(_getIconForComponent(entry.key), size: 24, color: iconColor),
+                  ),
+                );
+              }).toList(),
+            )
+          ],
+        ),
       ),
     );
+  }
+
+  void _jugarContraRival(Jugador rival, String? subtipo) {
+    if (_cartaSeleccionada == null) return;
+    widget.client.sendMessage({
+      'type': 'play_card',
+      'playerId': widget.myId,
+      'cartaId': _cartaSeleccionada!.id,
+      'targetPlayerId': rival.id,
+      'targetSubtipo': subtipo ?? _cartaSeleccionada!.subtipo,
+    });
   }
 
   Widget _buildMiTablero(Jugador yo) {
@@ -423,19 +559,29 @@ class _GameScreenState extends State<GameScreen> {
           alignment: WrapAlignment.center,
           children: yo.componentes.entries.map((entry) {
             bool tienePieza = entry.value != null;
+            Color borderColor = Colors.white10;
+            Color iconColor = Colors.white24;
+            if (tienePieza) {
+               switch (entry.value!.estado) {
+                case EstadoComponente.sano: borderColor = Colors.green; iconColor = Colors.greenAccent; break;
+                case EstadoComponente.danado: borderColor = Colors.red; iconColor = Colors.redAccent; break;
+                case EstadoComponente.blindado: borderColor = Colors.blue; iconColor = Colors.blueAccent; break;
+                default: break;
+              }
+            }
             return Container(
               width: 80,
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: tienePieza ? Colors.blue.withOpacity(0.2) : Colors.black38,
+                color: tienePieza ? iconColor.withAlpha(30) : Colors.black38,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: tienePieza ? Colors.blue : Colors.white10),
+                border: Border.all(color: borderColor, width: 2),
               ),
               child: Column(
                 children: [
-                  Icon(_getIconForComponent(entry.key), size: 30, color: tienePieza ? Colors.blue : Colors.white24),
+                  Icon(_getIconForComponent(entry.key), size: 30, color: iconColor),
                   const SizedBox(height: 4),
-                  Text(entry.key.toUpperCase(), style: TextStyle(fontSize: 9, color: tienePieza ? Colors.blue : Colors.white24)),
+                  Text(entry.key.toUpperCase(), style: TextStyle(fontSize: 9, color: iconColor)),
                 ],
               ),
             );
@@ -467,13 +613,23 @@ class _GameScreenState extends State<GameScreen> {
 
   Widget _buildCartaMano(Carta carta, bool miTurno) {
     Color color = _getColorForTipo(carta.tipo);
+    bool estaSeleccionada = _cartaSeleccionada?.id == carta.id;
+
     return GestureDetector(
       onTap: miTurno ? () {
-        widget.client.sendMessage({
-          'type': 'play_card',
-          'playerId': widget.myId,
-          'cartaId': carta.id,
-          'targetPlayerId': widget.myId, // Por ahora, componentes se juegan a uno mismo
+        setState(() {
+          String slug = carta.subtipo?.toLowerCase() ?? "";
+          if (carta.tipo == TipoCarta.falla || 
+             (carta.tipo == TipoCarta.especial && !slug.contains('malware') && !slug.contains('reinicio'))) {
+            _cartaSeleccionada = estaSeleccionada ? null : carta;
+          } else {
+            widget.client.sendMessage({
+              'type': 'play_card',
+              'playerId': widget.myId,
+              'cartaId': carta.id,
+              'targetPlayerId': widget.myId,
+            });
+          }
         });
       } : null,
       onLongPress: miTurno ? () {
@@ -485,14 +641,15 @@ class _GameScreenState extends State<GameScreen> {
       } : null,
       child: Opacity(
         opacity: miTurno ? 1.0 : 0.5,
-        child: Container(
-          width: 90,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          width: estaSeleccionada ? 100 : 90,
           margin: const EdgeInsets.symmetric(horizontal: 4),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
+            color: color.withAlpha(25),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: color, width: 2),
-            boxShadow: miTurno ? [BoxShadow(color: color.withOpacity(0.3), blurRadius: 8)] : [],
+            border: Border.all(color: estaSeleccionada ? Colors.white : color, width: estaSeleccionada ? 4 : 2),
+            boxShadow: miTurno ? [BoxShadow(color: color.withAlpha(75), blurRadius: 8)] : [],
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
