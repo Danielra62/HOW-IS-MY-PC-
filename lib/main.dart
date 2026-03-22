@@ -226,6 +226,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
       if (data['type'] == 'welcome') {
         _myId = data['yourId'];
       } else if (data['type'] == 'update' || data['type'] == 'game_started') {
+        if (!mounted) return;
         setState(() {
           _jugadores = (data['jugadores'] as List)
               .map((j) => Jugador.fromJson(j))
@@ -325,6 +326,7 @@ class _GameScreenState extends State<GameScreen> {
     _turnoActualId = widget.turnoActualId;
     widget.client.onMessageReceived = (data) {
       if (data['type'] == 'update') {
+        if (!mounted) return;
         setState(() {
           _jugadores = (data['jugadores'] as List)
               .map((j) => Jugador.fromJson(j))
@@ -350,7 +352,7 @@ class _GameScreenState extends State<GameScreen> {
         children: [
           // Equipos de Rivales (Arriba)
           SizedBox(
-            height: 200,
+            height: 120,
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
               itemCount: otros.length,
@@ -359,14 +361,18 @@ class _GameScreenState extends State<GameScreen> {
               },
             ),
           ),
-          const Spacer(),
-          // Mi Tablero (Medio)
-          _buildMiTablero(yo),
-          const Spacer(),
+          const Divider(),
+          // Mi Tablero (Centro)
+          Expanded(child: _buildMiTablero(yo)),
+          const Divider(),
+          // Instrucciones rápidas
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 4),
+            child: Text('Tocar: Jugar | Mantener: Descartar', style: TextStyle(fontSize: 10, color: Colors.grey)),
+          ),
           // Mi Mano (Abajo)
-          const Text('TU MANO', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.greenAccent)),
           Container(
-            height: 120,
+            height: 140,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -381,20 +387,22 @@ class _GameScreenState extends State<GameScreen> {
 
   Widget _buildEquipoRival(Jugador rival) {
     return Container(
-      width: 150,
-      margin: const EdgeInsets.all(8),
+      width: 140,
+      margin: const EdgeInsets.all(4),
+      padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(10)),
       child: Column(
         children: [
-          Text(rival.nombre, style: const TextStyle(fontWeight: FontWeight.bold)),
-          const Divider(),
-          // Mostrar mini-iconos de sus piezas
+          Text(rival.nombre, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12), overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 4),
           Wrap(
+            spacing: 2,
+            runSpacing: 2,
             children: rival.componentes.entries.map((entry) {
               return Icon(
                 _getIconForComponent(entry.key),
-                size: 20,
-                color: entry.value == null ? Colors.grey : Colors.green,
+                size: 16,
+                color: entry.value == null ? Colors.white24 : Colors.greenAccent,
               );
             }).toList(),
           )
@@ -405,17 +413,31 @@ class _GameScreenState extends State<GameScreen> {
 
   Widget _buildMiTablero(Jugador yo) {
     return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        const Text('TU EQUIPO', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 10),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        const Text('TU EQUIPO', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 2)),
+        const SizedBox(height: 20),
+        Wrap(
+          spacing: 20,
+          runSpacing: 20,
+          alignment: WrapAlignment.center,
           children: yo.componentes.entries.map((entry) {
-            return Column(
-              children: [
-                Icon(_getIconForComponent(entry.key), size: 40, color: entry.value == null ? Colors.grey : Colors.greenAccent),
-                Text(entry.key.toUpperCase(), style: const TextStyle(fontSize: 10)),
-              ],
+            bool tienePieza = entry.value != null;
+            return Container(
+              width: 80,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: tienePieza ? Colors.blue.withOpacity(0.2) : Colors.black38,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: tienePieza ? Colors.blue : Colors.white10),
+              ),
+              child: Column(
+                children: [
+                  Icon(_getIconForComponent(entry.key), size: 30, color: tienePieza ? Colors.blue : Colors.white24),
+                  const SizedBox(height: 4),
+                  Text(entry.key.toUpperCase(), style: TextStyle(fontSize: 9, color: tienePieza ? Colors.blue : Colors.white24)),
+                ],
+              ),
             );
           }).toList(),
         ),
@@ -434,28 +456,68 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
+  Color _getColorForTipo(TipoCarta tipo) {
+    switch (tipo) {
+      case TipoCarta.componente: return Colors.blue;
+      case TipoCarta.falla: return Colors.red;
+      case TipoCarta.reparacion: return Colors.green;
+      case TipoCarta.especial: return Colors.amber;
+    }
+  }
+
   Widget _buildCartaMano(Carta carta, bool miTurno) {
+    Color color = _getColorForTipo(carta.tipo);
     return GestureDetector(
       onTap: miTurno ? () {
-        // Lógica para jugar carta (Fase 3)
+        widget.client.sendMessage({
+          'type': 'play_card',
+          'playerId': widget.myId,
+          'cartaId': carta.id,
+          'targetPlayerId': widget.myId, // Por ahora, componentes se juegan a uno mismo
+        });
       } : null,
-      child: Container(
-        width: 80,
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        decoration: BoxDecoration(
-          color: miTurno ? Colors.grey[850] : Colors.black,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: miTurno ? Colors.greenAccent : Colors.grey, width: 2),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(carta.nombre, textAlign: TextAlign.center, style: const TextStyle(fontSize: 10)),
-            const Divider(),
-            Text(carta.tipo.name, style: const TextStyle(fontSize: 8, color: Colors.grey)),
-          ],
+      onLongPress: miTurno ? () {
+        widget.client.sendMessage({
+          'type': 'discard',
+          'playerId': widget.myId,
+          'cartaId': carta.id,
+        });
+      } : null,
+      child: Opacity(
+        opacity: miTurno ? 1.0 : 0.5,
+        child: Container(
+          width: 90,
+          margin: const EdgeInsets.symmetric(horizontal: 4),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color, width: 2),
+            boxShadow: miTurno ? [BoxShadow(color: color.withOpacity(0.3), blurRadius: 8)] : [],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(_getIconForCarta(carta), color: color, size: 24),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Text(
+                  carta.nombre,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  IconData _getIconForCarta(Carta carta) {
+    if (carta.tipo == TipoCarta.componente) return _getIconForComponent(carta.subtipo ?? "");
+    if (carta.tipo == TipoCarta.falla) return Icons.bug_report;
+    if (carta.tipo == TipoCarta.reparacion) return Icons.build;
+    return Icons.auto_awesome;
   }
 }

@@ -11,9 +11,10 @@ class GameServer {
   final List<WebSocketChannel> _clients = [];
   final List<Jugador> _jugadores = [];
   List<Carta> _mazo = [];
+  List<Carta> _descarte = [];
   HttpServer? _server;
   bool _partidaIniciada = false;
-  int _turnoIndex = 0; // Índice del jugador que tiene el turno
+  int _turnoIndex = 0;
 
   Future<void> startServer() async {
     var handler = webSocketHandler((WebSocketChannel webSocket) {
@@ -23,11 +24,7 @@ class GameServer {
         final data = jsonDecode(message);
         _handleMessage(webSocket, data);
       }, onDone: () {
-        int index = _clients.indexOf(webSocket);
-        if (index != -1) {
-          _clients.removeAt(index);
-          // Opcional: eliminar jugador de la lista si no ha empezado la partida
-        }
+        _clients.remove(webSocket);
       });
     });
 
@@ -53,20 +50,20 @@ class GameServer {
           },
         );
         _jugadores.add(nuevoJugador);
-        
-        // Enviar ID privado al que acaba de entrar
-        client.sink.add(jsonEncode({
-          'type': 'welcome',
-          'yourId': myId,
-        }));
-
+        client.sink.add(jsonEncode({'type': 'welcome', 'yourId': myId}));
         _broadcastState('update');
         break;
 
       case 'start_game':
-        if (_jugadores.length >= 2) {
-          _iniciarPartida();
-        }
+        if (_jugadores.length >= 2) _iniciarPartida();
+        break;
+
+      case 'play_card':
+        _procesarJugada(data['playerId'], data['cartaId'], data['targetPlayerId']);
+        break;
+
+      case 'discard':
+        _procesarDescarte(data['playerId'], data['cartaId']);
         break;
     }
   }
@@ -74,18 +71,60 @@ class GameServer {
   void _iniciarPartida() {
     _partidaIniciada = true;
     _mazo = DeckService.generarMazo();
-    _turnoIndex = 0; // Empieza el primero que se conectó (el Host)
-
+    _turnoIndex = 0;
     for (var jugador in _jugadores) {
       jugador.mano = [];
       for (int i = 0; i < 3; i++) {
-        if (_mazo.isNotEmpty) {
-          jugador.mano.add(_mazo.removeAt(0));
-        }
+        if (_mazo.isNotEmpty) jugador.mano.add(_mazo.removeAt(0));
+      }
+    }
+    _broadcastState('game_started');
+  }
+
+  void _procesarJugada(String playerId, String cartaId, String? targetPlayerId) {
+    final jugador = _jugadores.firstWhere((j) => j.id == playerId);
+    if (_jugadores[_turnoIndex].id != playerId) return; // No es su turno
+
+    final carta = jugador.mano.firstWhere((c) => c.id == cartaId);
+    bool jugadaValida = false;
+
+    if (carta.tipo == TipoCarta.componente) {
+      // Regla: Solo un componente de cada tipo y que no esté ya ocupado
+      if (jugador.componentes[carta.subtipo] == null) {
+        jugador.componentes[carta.subtipo!] = EstadoPieza(estado: EstadoComponente.sano);
+        jugadaValida = true;
       }
     }
 
-    _broadcastState('game_started');
+    if (jugadaValida) {
+      _finalizarTurno(jugador, carta);
+    }
+  }
+
+  void _procesarDescarte(String playerId, String cartaId) {
+    final jugador = _jugadores.firstWhere((j) => j.id == playerId);
+    if (_jugadores[_turnoIndex].id != playerId) return;
+
+    final carta = jugador.mano.firstWhere((c) => c.id == cartaId);
+    _finalizarTurno(jugador, carta);
+  }
+
+  void _finalizarTurno(Jugador jugador, Carta cartaUsada) {
+    jugador.mano.remove(cartaUsada);
+    _descarte.add(cartaUsada);
+
+    // Robar nueva carta
+    if (_mazo.isEmpty && _descarte.isNotEmpty) {
+      _mazo = List.from(_descarte)..shuffle();
+      _descarte.clear();
+    }
+    if (_mazo.isNotEmpty) {
+      jugador.mano.add(_mazo.removeAt(0));
+    }
+
+    // Siguiente turno
+    _turnoIndex = (_turnoIndex + 1) % _jugadores.length;
+    _broadcastState('update');
   }
 
   void _broadcastState(String type) {
@@ -95,9 +134,7 @@ class GameServer {
       'jugadores': _jugadores.map((j) => j.toJson()).toList(),
     });
     for (var client in _clients) {
-      try {
-        client.sink.add(state);
-      } catch (e) {}
+      try { client.sink.add(state); } catch (e) {}
     }
   }
 }
